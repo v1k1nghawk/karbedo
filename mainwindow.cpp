@@ -8,7 +8,15 @@ MainWindow::MainWindow(QWidget *parent) :
 {
     QThread::currentThread()->setObjectName(APP_NAME+"_GUI");
     ui->setupUi(this);
+
+    // determine cache location
+    m_cache_path = QDir::homePath() + QString("/.cache/") + APP_NAME + QString("/");
+    m_cache_file = m_cache_path + "current_attack.kbd";
+
+    // initital GUI setup
     ui->usersCBox->hide();
+    if (!isCacheExists())
+        ui->resumeButton->hide();
     ui->stopButton->hide();
 
     // GUI->buttons
@@ -42,26 +50,36 @@ MainWindow::~MainWindow()
     destroyThread(m_update_thread);
     this->m_updateobj = Q_NULLPTR;
 
+    QApplication::restoreOverrideCursor();
+
     delete ui;
+}
+
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    // save current attack's data and terminate ongoing attack
+    abortAttackActions();
+
+    // call parent's method
+    QWidget::closeEvent(event);
 }
 
 
 void MainWindow::openFileButton_clicked()
 {
-    ui->GeneralTE->clear();
-
     // choose file
-    QString fileName = QFileDialog::getOpenFileName(this, "Select a file to open...", QDir::homePath());
-    if (fileName == "") {
+    QString datafileName = QFileDialog::getOpenFileName(this, "Select a file to open...", QDir::homePath());
+    if (datafileName == "") {
         ui->StatusLabel->setText("File: no file name specified");
         return;
     }
 
-    ui->StatusLabel->setText("File: " + fileName);
+    ui->StatusLabel->setText("File: " + datafileName);
 
     // read file
     unsigned int lineCounter = 1;
-    QFile inputFile(fileName);
+    QFile inputFile(datafileName);
     if (inputFile.open(QIODevice::ReadOnly))
     {
         // restore system initial state
@@ -70,10 +88,11 @@ void MainWindow::openFileButton_clicked()
         m_initialsetup_usersCBox = 1;
 
         // populate users' db
+        QString shadowFileLine;
         QTextStream in(&inputFile);
         while (!in.atEnd())
         {
-            QString shadowFileLine = in.readLine();
+            shadowFileLine = in.readLine();
 
             // collect usernames with their data
             QRegExp rxdelim_userfields("\\:");
@@ -92,7 +111,7 @@ void MainWindow::openFileButton_clicked()
 
                 // incorrect data for some user
                 if (splittedLine.count() != 9)
-                    throw ShadowParsingException{fileName + "corrupted at line " + lineCounter};
+                    throw ParsingException{datafileName + "corrupted at line " + lineCounter};
 
                 // user
                 current_username = splittedLine.at(0);
@@ -111,34 +130,34 @@ void MainWindow::openFileButton_clicked()
 
                 // unsupported hash algorithm
                 if (user::getAlgorithmName(current_algnum) == "")
-                    throw ShadowParsingException{"user " + current_username + " has unsupported encryption method (scheme id=" + current_algnum + ")"};
+                    throw ParsingException{"user " + current_username + " has unsupported encryption method (scheme id=" + current_algnum + ")"};
 
                 // add user to db
                 m_shadowUsers.push_back(user(current_username, current_algnum, current_salt, current_hashofpass));
 
-            } catch (ShadowParsingException &se)
+            } catch (ParsingException &pe)
             {
-                ui->GeneralTE->append("Warning: " + QString(se.what()));
+                ui->GeneralTE->append("Warning: " + QString(pe.what()));
             }
 
             lineCounter++;
         }
         inputFile.close();
     } else {
-        ui->StatusLabel->setText("Cannot open file: " + fileName);
+        ui->StatusLabel->setText("Cannot open file " + datafileName);
     }
 
     // show usernames
     ui->retranslateUi(this);
     if (m_shadowUsers.empty())
     {
-        ui->StatusLabel->setText("File: " + fileName + " there is no correct lines");
+        ui->StatusLabel->setText("File " + datafileName + ": there is no correct lines");
     }
     else
     {
         QStringList usersList;
         for (int i = 0; i < m_shadowUsers.size(); ++i)
-            usersList.append(m_shadowUsers[i].getUsername());
+            usersList.append(m_shadowUsers[i].getName());
 
         QStringListModel *usersModel = new QStringListModel();
         usersModel->setStringList(usersList);
@@ -147,7 +166,7 @@ void MainWindow::openFileButton_clicked()
         ui->usersCBox->setModel(usersModel);
         ui->usersCBox->show();
 
-        ui->StatusLabel->setText("File: " + fileName + " parsed");
+        ui->StatusLabel->setText("File " + datafileName + " parsed");
     }
 
 }
@@ -155,40 +174,122 @@ void MainWindow::openFileButton_clicked()
 
 void MainWindow::on_usersCBox_currentTextChanged()
 {
-    // skip first fire
-    if (m_initialsetup_usersCBox == 1)
+    startAttackActions(0);
+}
+
+
+void MainWindow::on_resumeButton_clicked()
+{
+    startAttackActions(1);
+}
+
+
+void MainWindow::startAttackActions(const bool mode)
+{
+    // mode 0 - for new calculations
+    // mode 1 - for resuming calculations
+
+    QString selected_username;
+    if (mode == 0)
     {
-        m_initialsetup_usersCBox = 0;
-        return;
+        // skip first fire
+        if (m_initialsetup_usersCBox == 1)
+        {
+            m_initialsetup_usersCBox = 0;
+            return;
+        }
+
+        // get new chosen user
+        selected_username = ui->usersCBox->currentText();
     }
 
-    // get chosen user
-    QString selected_username = ui->usersCBox->currentText();
+    ui->resumeButton->hide();
 
-    // prepare GUI for calculations
-    ui->GeneralTE->clear();
-    ui->usersCBox->hide();
+    if (mode == 0)
+    {
+        // purge all previous computations' achievements
+        clear_cache();
+        ui->GeneralTE->clear();
+    }
+
+    // prepare GUI
     ui->openFileButton->hide();
     ui->stopButton->show();
-    ui->StatusLabel->setText("Performing computations");
+    if (mode == 0)
+    {
+        ui->GeneralTE->clear();
+        ui->usersCBox->hide();
+        ui->StatusLabel->setText("Performing computations");
+    }
+    else if (mode == 1)
+        ui->StatusLabel->setText("Continuation of computations");
+
     QApplication::setOverrideCursor(Qt::BusyCursor);
 
     // get chosen user's data
-    m_selecteduserobj = new user(Q_NULLPTR);
-    for (int i = 0; i < m_shadowUsers.size(); ++i) {
-        if (m_shadowUsers[i].getUsername() == selected_username)
+    if (mode == 0)
+    {
+        for (int i = 0; i < m_shadowUsers.size(); ++i) {
+            if (m_shadowUsers[i].getName() == selected_username)
+            {
+                m_selecteduserobj = new user(m_shadowUsers.at(i));
+                break;
+            }
+        }
+    }
+    else if (mode == 1)
+    {
+        // retrieve data from cache
+        QJsonObject loaded_userdata;
+        try
         {
-            m_selecteduserobj = new user(m_shadowUsers.at(i));
-            break;
+            if (!load_cache(loaded_userdata))
+                throw ParsingException{"saved data loading exception"};
+
+            // set target's properties
+            m_selecteduserobj = new user(loaded_userdata);
+
+            // set attack's properties
+            QJsonArray attack_data;
+            if (loaded_userdata.contains("Pause") && loaded_userdata["Pause"].isArray())
+                attack_data = loaded_userdata["Pause"].toArray();
+            else
+                throw ParsingException{"saved attack's data parsing exception"};
+
+            for (const QJsonValue& task_propertiesVal: attack_data)
+            {
+                QJsonObject task_propertiesObj = task_propertiesVal.toObject();
+
+                if (task_propertiesObj.contains("Milestone") && task_propertiesObj["Milestone"].isString() &&
+                    task_propertiesObj.contains("Heuristic") && task_propertiesObj["Heuristic"].isDouble() &&
+                    task_propertiesObj["Heuristic"].toInt() >= collisionAttackTask_CPU::Heuristic::none &&
+                    task_propertiesObj["Heuristic"].toInt() <= collisionAttackTask_CPU::Heuristic::full)
+                        collisionAttackTask_CPU::addCacheInit(task_propertiesObj["Milestone"].toString(), static_cast<collisionAttackTask_CPU::Heuristic>(task_propertiesObj["Heuristic"].toInt()));
+                else
+                    throw ParsingException{"saved attack's tasks' properties parsing exception"};
+            }
+
+        } catch (ParsingException &pe)
+        {
+            // restore app's fresh state
+            if (!QString(pe.what()).contains("field not found in saved data"))
+                 m_selecteduserobj->deleteLater();
+            m_selecteduserobj = Q_NULLPTR;
+            ui->GeneralTE->append("Error: " + QString(pe.what()) + ". Invalid cache");
+            clear_cache();
+            ui->openFileButton->show();
+            ui->stopButton->hide();
+            QApplication::restoreOverrideCursor();
+            return;
         }
     }
 
     // display target's data
-    ui->GeneralTE->append("User: " + m_selecteduserobj->getUsername());
-    ui->GeneralTE->append("Hash scheme: " + user::getAlgorithmName(m_selecteduserobj->getUseralgid()));
-    ui->GeneralTE->append("Salt: " + m_selecteduserobj->getUsersalt());
+    ui->GeneralTE->append("User: " + m_selecteduserobj->getName());
+    ui->GeneralTE->append("Hash scheme: " + user::getAlgorithmName(m_selecteduserobj->getAlgid()));
+    ui->GeneralTE->append("Salt: " + m_selecteduserobj->getSalt());
     ui->GeneralTE->append("Hash:");
-    ui->GeneralTE->append(m_selecteduserobj->getUserhash());
+    ui->GeneralTE->append(m_selecteduserobj->getHash());
     ui->GeneralTE->append("Possible passwords:");
     repaint();
 
@@ -196,7 +297,15 @@ void MainWindow::on_usersCBox_currentTextChanged()
     m_user_thread = new QThread(this);
     m_selecteduserobj->moveToThread(m_user_thread);
     // user thread <-> user obj
-    QObject::connect(m_user_thread, SIGNAL(started()), m_selecteduserobj, SLOT(collision_attack()));
+    if (mode == 0)
+    {
+        QObject::connect(m_user_thread, SIGNAL(started()), m_selecteduserobj, SLOT(collision_attack()));
+    }
+    else if (mode == 1)
+    {
+        QObject::connect(m_user_thread, SIGNAL(started()), m_selecteduserobj, SLOT(resumed_collision_attack()));
+    }
+
     QObject::connect(m_user_thread, SIGNAL(finished()), m_selecteduserobj, SLOT(deleteLater()));
     QObject::connect(m_selecteduserobj, SIGNAL(signal_attackFinished()), m_user_thread, SLOT(quit()));
 
@@ -208,12 +317,15 @@ void MainWindow::on_usersCBox_currentTextChanged()
 
 void MainWindow::on_stopButton_clicked()
 {
-    stopActions();
+    stopAttackActions();
 }
 
 
-void MainWindow::stopActions()
+void MainWindow::stopAttackActions()
 {
+    if (m_selecteduserobj == Q_NULLPTR)
+        return;
+
     // stop and destruct target's calculations
     m_selecteduserobj->attack_interrupt();
     destroyThread(m_user_thread);
@@ -223,11 +335,55 @@ void MainWindow::stopActions()
     ui->StatusLabel->setText("Found " + QString::number(collisionAttackTask_CPU::getHitsNum()) + " collisions in " + QString::number(m_computation_timer.elapsed()/1000) + " sec");
     m_computation_timer.invalidate();
 
+    clear_cache();
+
     // restore GUI initial state
-    ui->usersCBox->show();
+    if (ui->usersCBox->count())
+        ui->usersCBox->show();
     ui->openFileButton->show();
     ui->stopButton->hide();
     QApplication::restoreOverrideCursor();
+}
+
+
+void MainWindow::abortAttackActions()
+{
+    if (m_selecteduserobj == Q_NULLPTR)
+        return;
+
+    // get target's properties
+    QJsonObject user_data;
+
+    m_selecteduserobj->write_to_json(user_data);
+
+    // save, stop and destruct target's calculations
+    m_selecteduserobj->attack_save();
+    destroyThread(m_user_thread);
+    m_selecteduserobj = Q_NULLPTR;
+
+    m_computation_timer.invalidate();
+
+    // get attack's properties
+    QJsonArray attack_data;
+    while (true)
+    {
+        QPair<QString, collisionAttackTask_CPU::Heuristic> task_savings = collisionAttackTask_CPU::getMilestone();
+        if (task_savings.first == QString(""))
+            break;
+
+        QJsonObject current_savings;
+        current_savings["Milestone"] = task_savings.first;
+        current_savings["Heuristic"] = task_savings.second;
+        attack_data.push_back(current_savings);
+    }
+
+    user_data["Pause"] = attack_data;
+
+    // write data to cachefile
+    QJsonDocument docUserAttack;
+    docUserAttack.setObject(user_data);
+
+    save_cache(docUserAttack);
 }
 
 
@@ -284,6 +440,9 @@ void MainWindow::statusUpdate()
 
 void MainWindow::destroyThread(QThread* del_thread)
 {
+    if (del_thread == Q_NULLPTR)
+        return;
+
     del_thread->quit();
     if (!del_thread->wait(5000))
     {
@@ -292,4 +451,64 @@ void MainWindow::destroyThread(QThread* del_thread)
     }
     delete del_thread;
     del_thread = Q_NULLPTR;
+}
+
+
+bool MainWindow::isCacheExists()
+{
+    QFileInfo check_file(m_cache_file);
+
+    return check_file.exists() && check_file.isFile();
+}
+
+
+bool MainWindow::load_cache(QJsonObject& json)
+{
+
+    QFile loadFile(m_cache_file);
+
+    if (!loadFile.open(QIODevice::ReadOnly))
+        return false;
+
+    QByteArray loadData = loadFile.readAll();
+
+    QJsonDocument loadDoc(QJsonDocument::fromJson(loadData));
+
+    if (loadDoc.isNull())
+        return false;
+
+    json = loadDoc.object();
+
+    if (json.isEmpty())
+        return false;
+
+    return true;
+}
+
+
+bool MainWindow::save_cache(QJsonDocument current_attack_data)
+{
+    if (!clear_cache())
+        return false;
+
+    QDir save_dir;
+    if(!save_dir.exists(m_cache_path))
+        save_dir.mkpath(m_cache_path);
+
+    QFile jsonCacheFile(m_cache_file);
+    if (jsonCacheFile.open(QFile::WriteOnly))
+        if (jsonCacheFile.write(current_attack_data.toJson()))
+            return true;
+    return false;
+}
+
+
+bool MainWindow::clear_cache()
+{
+    QFile main_cache(m_cache_file);
+    if (!main_cache.exists())
+        return true;
+    if (main_cache.remove())
+        return true;
+    return false;
 }

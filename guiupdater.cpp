@@ -29,7 +29,7 @@ void guiUpdater::run_update()
         }
 
         // wait for start attacks
-        if (collisionAttackTask_CPU::attackStatus() != true)
+        if (collisionAttackTask_CPU::attackStatus() != 1)
         {
             QThread::sleep(2);
         }
@@ -51,7 +51,7 @@ void guiUpdater::run_update()
                 if (password_to_gui == QString(""))
                 {
                     // attack stopped
-                    if (collisionAttackTask_CPU::attackStatus() == false)
+                    if (collisionAttackTask_CPU::attackStatus() != 1)
                         break;
 
                     QThread::sleep(1);

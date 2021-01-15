@@ -19,12 +19,12 @@ SOURCES += main.cpp\
     guiupdater.cpp
 
 HEADERS  += mainwindow.h \
-    shadowparsingexception.h \
     user.h \
     general.h \
     collisionAttackTask_CPU.h \
     guiupdater.h \
-    karbedo_app.h
+    karbedo_app.h \
+    parsingexception.h
 
 FORMS    += mainwindow.ui
 

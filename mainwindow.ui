@@ -72,7 +72,7 @@
    <widget class="QPushButton" name="stopButton">
     <property name="geometry">
      <rect>
-      <x>240</x>
+      <x>180</x>
       <y>10</y>
       <width>93</width>
       <height>27</height>
@@ -80,6 +80,19 @@
     </property>
     <property name="text">
      <string>STOP</string>
+    </property>
+   </widget>
+   <widget class="QPushButton" name="resumeButton">
+    <property name="geometry">
+     <rect>
+      <x>280</x>
+      <y>10</y>
+      <width>93</width>
+      <height>27</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>RESUME</string>
     </property>
    </widget>
   </widget>

@@ -5,12 +5,12 @@
 #include <QEvent>
 #include <typeinfo>
 #include <QDebug>
-#include <shadowparsingexception.h>
+#include <parsingexception.h>
 
 
 /**
  * @class karbedo_app
- * @brief Application with reimplemented notify() method
+ * @brief Application with reimplemented notify() method.
  */
 class karbedo_app final : public QApplication
 {
@@ -24,7 +24,7 @@ public:
     * @param receiver - event receiving object.
     * @param event    - object delivered to the receiver.
     */
-    bool notify(QObject* receiver, QEvent* event) override
+    bool notify(QObject *receiver, QEvent *event) override
     {
         try {
             return QApplication::notify(receiver, event);

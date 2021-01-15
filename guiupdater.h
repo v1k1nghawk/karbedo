@@ -5,6 +5,7 @@
 
 #include "collisionAttackTask_CPU.h"
 
+
 class guiUpdater : public QObject
 {
     Q_OBJECT
@@ -32,7 +33,7 @@ public slots:
 
     /**
     * @brief Polls collisionAttackTask_CPU passwords' results and
-    * updates the interface (spinner + new password).
+    * updates the interface (spinner + new mined password).
     *
     * @see collisionAttackTask_CPU, signal_computing(), signal_pwfound()
     */
@@ -49,7 +50,7 @@ public slots:
 signals:
 
     /**
-    * @brief User's computations is still active. Emitted during attack on the user's hash.
+    * @brief Notifies that user's computations is still active. Emitted during attack on the user's hash.
     * @see collisionAttackTask_CPU::attackStatus()
     */
     void signal_computing();
@@ -85,7 +86,10 @@ private:
 
     /**
     * @brief Checks the need for the updater object and refreshes GUI.
-    * @see MainWindow
+    * @return
+    * @value FALSE - gets stop request and exits.
+    * @value TRUE - GUI refreshed.
+    * @see MainWindow, stopUpdate()
     */
     bool keepAlive();
 
